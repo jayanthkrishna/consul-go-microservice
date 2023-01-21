@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -8,13 +9,24 @@ import (
 	"github.com/hashicorp/consul/api"
 )
 
-const ttl = time.Second * 8
+const (
+	ttl     = time.Second * 8
+	checkId = "check_health"
+)
 
 type Service struct {
+	consulClient *api.Client
 }
 
 func NewService() *Service {
-	return &Service{}
+	client, err := api.NewClient(&api.Config{})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	return &Service{
+		consulClient: client,
+	}
 }
 
 func (s *Service) Start() {
@@ -23,13 +35,15 @@ func (s *Service) Start() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	s.registerService()
+	fmt.Println("Service Registered")
+	go s.updateHealthCheck()
 	s.acceptLoop(ln)
 
 }
 
 func (s *Service) acceptLoop(ln net.Listener) {
-
+	fmt.Println("Accepting Connections")
 	for {
 		_, err := ln.Accept()
 
@@ -39,12 +53,24 @@ func (s *Service) acceptLoop(ln net.Listener) {
 	}
 }
 
+func (s *Service) updateHealthCheck() {
+	ticker := time.NewTicker(time.Second * 5)
+
+	for {
+		err := s.consulClient.Agent().UpdateTTL(checkId, "online", api.HealthPassing)
+		if err != nil {
+			log.Fatal(err)
+		}
+		<-ticker.C
+	}
+}
+
 func (s *Service) registerService() {
 	check := &api.AgentServiceCheck{
 		DeregisterCriticalServiceAfter: ttl.String(),
 		TLSSkipVerify:                  true,
 		TTL:                            ttl.String(),
-		CheckID:                        "checkalive",
+		CheckID:                        checkId,
 	}
 
 	register := &api.AgentServiceRegistration{
@@ -56,12 +82,28 @@ func (s *Service) registerService() {
 		Check:   check,
 	}
 
-}
+	// query := map[string]any{
+	// 	"type":       "service",
+	// 	"service":    "mycluster",
+	// 	"passinonly": true,
+	// }
 
-func (s *Service) Init() {
+	// plan, err := watch.Parse(query)
+
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	err := s.consulClient.Agent().ServiceRegister(register)
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 }
 
 func main() {
 
+	s := NewService()
+	s.Start()
 }
